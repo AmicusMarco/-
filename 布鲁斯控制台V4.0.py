@@ -82,7 +82,6 @@ _eco_qos_original_priority = _NORMAL_PRIORITY_CLASS
 _eco_qos_kernel32 = None
 
 def _open_process_handle():
-    """获取当前进程的真实句柄（伪句柄不适用于 SetProcessInformation）"""
     kernel32 = _eco_qos_kernel32 or ctypes.windll.kernel32
     pid = kernel32.GetCurrentProcessId()
     return kernel32.OpenProcess(
@@ -91,9 +90,6 @@ def _open_process_handle():
     )
 
 def _detect_eco_qos():
-    """实际调用 SetProcessInformation 检测是否支持 EcoQoS（最可靠方式）
-    注意：此函数不依赖 logger，可在模块早期安全调用
-    """
     global _eco_qos_checked, _eco_qos_supported, _eco_qos_kernel32
     if _eco_qos_checked:
         return _eco_qos_supported
@@ -138,20 +134,12 @@ def _detect_eco_qos():
         return False
 
 def is_eco_qos_supported() -> bool:
-    """当前系统是否支持 EcoQoS 效率模式"""
     return _detect_eco_qos()
 
 def is_eco_qos_active() -> bool:
-    """当前是否已处于 EcoQoS 效率模式"""
     return _eco_qos_active
 
 def set_eco_qos(enable: bool) -> bool:
-    """开启或关闭当前进程的 EcoQoS 效率模式
-    开启时同时设置 IDLE_PRIORITY_CLASS，任务管理器将显示 🍃 叶子图标
-    
-    Returns:
-        bool: 是否设置成功
-    """
     global _eco_qos_active, _eco_qos_original_priority
     if not _detect_eco_qos():
         return False
@@ -522,7 +510,6 @@ def mouse_button_to_str(button):
         return None
 
 def get_action_command(action, neck_active=False, mouth_active=False):
-    """根据动作名获取串口指令，考虑条件开关"""
     if action in EXPR_ACTION_COMMANDS:
         return EXPR_ACTION_COMMANDS[action]
     if action == "heart":
@@ -1047,7 +1034,6 @@ class ConfigManager:
 
     @staticmethod
     def save(config: dict):
-        """原子写入配置：先写临时文件，成功后再替换，防止崩溃导致文件损坏"""
         temp_file = CONFIG_FILE + ".tmp"
         try:
             with open(temp_file, "w", encoding="utf-8") as f:
@@ -1095,7 +1081,6 @@ _save_debounce_timer = None
 _save_debounce_lock = threading.Lock()
 
 def schedule_config_save(delay=0.5):
-    """延迟保存配置，delay秒内重复调用会重置计时器（防抖）"""
     global _save_debounce_timer
     with _save_debounce_lock:
         if _save_debounce_timer is not None:
@@ -1105,7 +1090,6 @@ def schedule_config_save(delay=0.5):
         _save_debounce_timer.start()
 
 def _do_debounced_save():
-    """执行实际的配置保存"""
     global _save_debounce_timer
     with _save_debounce_lock:
         _save_debounce_timer = None
@@ -1115,7 +1099,6 @@ def _do_debounced_save():
         log_error(f"防抖保存配置失败: {e}")
 
 def flush_config_save():
-    """立即执行待执行的保存操作（程序退出时调用）"""
     global _save_debounce_timer
     with _save_debounce_lock:
         if _save_debounce_timer is not None:
@@ -1371,8 +1354,6 @@ def stop_serial_worker():
     logger.info("串口发送线程已停止")
 
 def safe_serial_write(data, force=False):
-    """将数据放入串口发送队列。force=True时忽略序列锁。
-    优化：快速检查前置，减少锁获取次数，降低竞争。"""
     if isinstance(data, str):
         data = data.encode()
     
@@ -1418,7 +1399,6 @@ ZZ_BUFFER_TIMEOUT = 0.5
 MOMO_BUFFER_TIMEOUT = 0.5
 
 def _flush_zz_buffer():
-    """ZZ缓冲超时：显示缓冲的z（仅发送显示字符，不发送任何额外命令）"""
     with state.lock:
         if not state.zz_pending:
             return
@@ -1427,7 +1407,6 @@ def _flush_zz_buffer():
     safe_serial_write(b"Z\n")
 
 def _flush_momo_buffer():
-    """momo缓冲超时：显示缓冲的m/o字符（仅发送显示字符，不发送任何额外命令）"""
     with state.lock:
         buf = state.momo_pending_buffer
         state.momo_pending_buffer = ""
@@ -1436,7 +1415,6 @@ def _flush_momo_buffer():
         safe_serial_write(c.upper().encode() + b"\n")
 
 def _trigger_expression_temporary(cmd_char, restore_delay=3.0):
-    """触发临时表情：持有序列锁，顺序发送 指令→等待→b"""
     def _sequence():
         _cmd_sequence_lock.acquire()
         _sequence_active.set()
@@ -1468,7 +1446,6 @@ def _trigger_expr_action(action):
         safe_serial_write(cmd)
 
 def _send_close_sequence():
-    """关闭程序前发送表情复位序列：切换表情→眼睛回正→脖子回正(DLC)→下巴上转3次→昏睡"""
     with state.lock:
         dlc_on = state.dlc_enabled
         service_running = state.service_active
@@ -1510,7 +1487,6 @@ def _start_momo_chain_timer(delay):
     _momo_timer.start()
 
 def _momo_chain_timeout():
-    """momo链超时：发送b恢复表情，重置链状态"""
     with state.lock:
         if state.momo_step == 0:
             return
@@ -1531,7 +1507,6 @@ def _momo_chain_timeout():
     t.start()
 
 def _handle_momo_chain():
-    """momo触发：持有序列锁，顺序发送指令→等待→b/下一步"""
     with state.lock:
         step = state.momo_step
         now = time.time()
@@ -1593,8 +1568,6 @@ def _handle_momo_chain():
         t.start()
 
 def _check_expression_triggers(key):
-    """返回值: False=未匹配(正常显示), True=已触发(不显示), 'buffered'=缓冲中(不显示)
-    字符先缓冲不显示，0.5秒内匹配则触发动画，超时则显示文字"""
     char = None
     try:
         if hasattr(key, 'char') and key.char:
@@ -1741,7 +1714,6 @@ class _RAWINPUT(ctypes.Structure):
     ]
 
 def _handle_raw_input(lparam):
-    """解析 WM_INPUT 消息并分发按键事件。"""
     if not _raw_kb_enabled:
         return
     try:
@@ -1964,9 +1936,6 @@ def _cursor_really_moved(x, y):
     return False
 
 def _main_thread_call(callback):
-    """主线程时直接调用（Raw Input 经 WndProc 在主线程触发），
-    后台线程时用 root.after 调度（pynput 鼠标线程）。
-    在 WndProc 内调用 root.after 会引发 Tcl 事件循环重入导致崩溃。"""
     if threading.current_thread() is threading.main_thread():
         try:
             callback()
@@ -1980,7 +1949,6 @@ def on_move(x, y):
     if not state.service_active or not state.interaction_enabled or state.hardware_overloaded:
         return
     
-    # 优化：先用 pynput 坐标做阈值判断，减少系统 API 调用
     # 只有当 pynput 坐标显示移动超过阈值时，才获取系统级精确坐标
     if not _cursor_really_moved(x, y):
         return
@@ -2123,8 +2091,6 @@ def on_press(key):
         _main_thread_call(lambda c=combo: binding_cb(c))
         return
 
-    # ---- 读取状态（优化：直接引用 keybinds 字典，减少拷贝开销）----
-    # keybinds 在互动模式下是只读的，无需 copy，减少 GC 压力
     with state.lock:
         kb = state.keybinds
         service_active = state.service_active
@@ -2145,7 +2111,6 @@ def on_press(key):
     combo = build_combo_str(key_str, mods_snapshot)
 
     # ---- 快捷开关热键（不依赖互动状态，只要有键盘监听即可触发）----
-    # 优化：只添加已绑定的键，避免 None/空键
     toggle_map = {}
     for _action in ("toggle_mouth", "toggle_keyboard_mouth", "toggle_neck",
                     "toggle_eye_input", "toggle_service"):
@@ -2589,7 +2554,6 @@ class ModernButton(tk.Frame):
 
 
 class RoundedButton(tk.Canvas):
-    """圆角按钮组件，使用 PIL 绘制抗锯齿圆角矩形，支持 hover 效果和禁用状态"""
 
     def __init__(self, parent, text, command=None, width=220, height=46,
                  radius=14, bg=None, fg=None, hover_bg=None,
@@ -2866,7 +2830,6 @@ def refresh_ports():
         logger.warning(f"刷新串口失败: {e}")
 
 def _get_work_area():
-    """获取当前屏幕工作区边界（排除任务栏）"""
     try:
         rect = wintypes.RECT()
         user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0)  # SPI_GETWORKAREA
@@ -3249,7 +3212,6 @@ class KeybindWindow:
 
     @classmethod
     def get_or_create(cls, parent):
-        """单例：若已有打开的窗口则聚焦，否则新建"""
         for inst in cls._active_instances:
             try:
                 if inst.win.winfo_exists():
@@ -4210,7 +4172,6 @@ def _on_system_power_event():
         logger.error("[系统事件] DLC未开启，跳过昏睡指令")
 
 def _install_power_event_monitor():
-    """安装 WndProc 钩子：处理电源事件 + Raw Input 键盘监听。"""
     global _original_wndproc, _new_wndproc_ref, _power_wndproc_type
     try:
         if root is None or not root.winfo_exists():
