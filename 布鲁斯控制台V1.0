@@ -1,5 +1,5 @@
 #此为布鲁斯控制台原版脚本：
-#作者：隔墙有耳 QQ：1842364889/ 626682642
+#作者：隔墙有耳 QQ：1842364889/ 626682642 
 #----------------------------------------------------------------------------------------------------
 from pynput.mouse import Listener, Button
 from pynput.keyboard import Listener as KeyListener, Key, KeyCode
