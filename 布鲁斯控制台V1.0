@@ -1,0 +1,462 @@
+#此为布鲁斯控制台原版脚本：
+#作者：隔墙有耳 QQ：1842364889/ 626682642
+#----------------------------------------------------------------------------------------------------
+from pynput.mouse import Listener, Button
+from pynput.keyboard import Listener as KeyListener, Key, KeyCode
+import serial
+import time
+import tkinter as tk
+from tkinter import ttk, messagebox
+import threading
+import ctypes
+import psutil
+import json
+import sys
+import os
+
+# ===================== 后台默认配置 =====================
+DEFAULT_PORT = "COM6"
+DEFAULT_RESOLUTION = "1920x1080"
+DEFAULT_MOUTH_ACTIVE = False   # 默认嘴巴停止互动
+DEFAULT_NECK_ACTIVE = False    # 默认脖子停止互动
+TARGET_X_START = 6
+TARGET_X_END = 0
+TARGET_Y_MIN, TARGET_Y_MAX = 0, 4
+BAUDRATE = 115200
+MOUSE_MOVE_INTERVAL = 0.02     # 鼠标移动限流间隔（秒），约50次/秒
+# =======================================================
+
+# --------------------- 配置文件路径（保存到程序所在目录） ---------------------
+def get_base_dir():
+    """获取可执行文件所在的目录（打包后）或脚本所在目录（开发时）"""
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    else:
+        return os.path.dirname(os.path.abspath(__file__))
+
+BASE_DIR = get_base_dir()
+CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
+
+def load_config():
+    """加载配置，返回 (port, resolution, mouth_active, neck_active)"""
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            port = data.get("port", DEFAULT_PORT)
+            resolution = data.get("resolution", DEFAULT_RESOLUTION)
+            mouth_active = data.get("mouth_active", DEFAULT_MOUTH_ACTIVE)
+            neck_active = data.get("neck_active", DEFAULT_NECK_ACTIVE)
+            return port, resolution, mouth_active, neck_active
+        except:
+            pass
+    return DEFAULT_PORT, DEFAULT_RESOLUTION, DEFAULT_MOUTH_ACTIVE, DEFAULT_NECK_ACTIVE
+
+def save_config(port, resolution, mouth_active, neck_active):
+    """保存全部配置"""
+    try:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump({
+                "port": port,
+                "resolution": resolution,
+                "mouth_active": mouth_active,
+                "neck_active": neck_active
+            }, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        messagebox.showerror("保存配置失败", f"无法保存配置文件：{str(e)}\n路径：{CONFIG_FILE}")
+
+def get_screen_resolution():
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+        width = ctypes.windll.user32.GetSystemMetrics(0)
+        height = ctypes.windll.user32.GetSystemMetrics(1)
+        return f"{width}x{height}"
+    except:
+        return DEFAULT_RESOLUTION
+
+# --------------------- 全局状态 ---------------------
+ser = None
+mouse_listener = None
+key_listener = None
+service_active = False
+interaction_enabled = False
+last_map_x = -1
+last_map_y = -1
+last_move_time = 0               # 用于鼠标移动限流
+ORIGIN_X_MIN = ORIGIN_X_MAX = ORIGIN_Y_MIN = ORIGIN_Y_MAX = 0
+
+# 新增：嘴巴和脖子开关（初始值会在加载配置后覆盖）
+mouth_active = False
+neck_active = False
+
+# 硬编码监控进程名单
+MONITOR_PROCESSES = [
+    "bf2042.exe",
+    "cod.exe",
+    "crossfire.exe",
+    "crossfire_x64.exe",
+    "cs2.exe",
+    "destiny2.exe",
+    "dota2.exe",
+    "ffxiv_dx11.exe",
+    "ffxivgame.exe",
+    "fortniteclient-win64-shipping.exe",
+    "hearthstone.exe",
+    "league of legends.exe",
+    "lol.launcher_tencent.exe",
+    "lolclient.exe",
+    "modernwarfare.exe",
+    "narakabladepoint.exe",
+    "overwatch.exe",
+    "overwatch_launcher.exe",
+    "pubg.exe",
+    "r5apex.exe",
+    "rainbowsix.exe",
+    "rainbowsix_vulkan.exe",
+    "rocketleague.exe",
+    "sc2_x64.exe",
+    "star craft ii.exe",
+    "tslgame.exe",
+    "valorant.exe",
+    "warframe.exe",
+    "warframe.x64.exe",
+    "wow.exe",
+    "worldoftanks.exe",
+    "worldofwarships.exe",
+    "worldofwarships64.exe",
+]
+
+# ===================== 鼠标/键盘回调 =====================
+def on_move(x, y):
+    global last_map_x, last_map_y, last_move_time
+    if not service_active or not interaction_enabled:
+        return
+    # 限流：避免过于密集的鼠标回调占用CPU
+    now = time.time()
+    if now - last_move_time < MOUSE_MOVE_INTERVAL:
+        return
+    last_move_time = now
+
+    clamp_x = max(ORIGIN_X_MIN, min(ORIGIN_X_MAX, x))
+    clamp_y = max(ORIGIN_Y_MIN, min(ORIGIN_Y_MAX, y))
+    x_ratio = (clamp_x - ORIGIN_X_MIN) / (ORIGIN_X_MAX - ORIGIN_X_MIN)
+    map_x = int(TARGET_X_START - x_ratio * (TARGET_X_START - TARGET_X_END))
+    y_ratio = (clamp_y - ORIGIN_Y_MIN) / (ORIGIN_Y_MAX - ORIGIN_Y_MIN)
+    map_y = int(TARGET_Y_MIN + y_ratio * (TARGET_Y_MAX - TARGET_Y_MIN))
+    map_x = max(TARGET_X_END, min(TARGET_X_START, map_x))
+    map_y = max(TARGET_Y_MIN, min(TARGET_Y_MAX, map_y))
+    if map_x != last_map_x or map_y != last_map_y:
+        send_data = f",X{map_x}Y{map_y}\n"
+        if ser and ser.is_open:
+            ser.write(send_data.encode())
+        last_map_x = map_x
+        last_map_y = map_y
+
+def on_click(x, y, button, pressed):
+    if not service_active or not interaction_enabled or not (ser and ser.is_open):
+        return
+    if pressed:
+        if button == Button.left:
+            ser.write(b"a\n")
+        elif button == Button.right:
+            ser.write(b"b\n")
+
+def on_scroll(x, y, dx, dy):
+    if not service_active or not interaction_enabled or not (ser and ser.is_open):
+        return
+    if not mouth_active:
+        return
+    if dy > 0:
+        ser.write(b"c\n")
+    elif dy < 0:
+        ser.write(b"f\n")
+
+def on_press(key):
+    if not service_active or not interaction_enabled or not (ser and ser.is_open):
+        return
+    if key == Key.ctrl_l:
+        if neck_active:
+            ser.write(b"k\n")
+        return
+    elif key == Key.alt_l:
+        if neck_active:
+            ser.write(b"l\n")
+        return
+    key_actions = {
+        Key.space: b'y', Key.backspace: b'w',   Key.enter: b'x',
+        KeyCode(char='a'): b'A', KeyCode(char='b'): b'B', KeyCode(char='c'): b'C',
+        KeyCode(char='d'): b'D', KeyCode(char='e'): b'E', KeyCode(char='f'): b'F',
+        KeyCode(char='g'): b'G', KeyCode(char='h'): b'H', KeyCode(char='i'): b'I',
+        KeyCode(char='j'): b'J', KeyCode(char='k'): b'K', KeyCode(char='l'): b'L',
+        KeyCode(char='m'): b'M', KeyCode(char='n'): b'N', KeyCode(char='o'): b'O',
+        KeyCode(char='p'): b'P', KeyCode(char='q'): b'Q', KeyCode(char='r'): b'R',
+        KeyCode(char='s'): b'S', KeyCode(char='t'): b'T', KeyCode(char='u'): b'U',
+        KeyCode(char='v'): b'V', KeyCode(char='w'): b'W', KeyCode(char='x'): b'X',
+        KeyCode(char='y'): b'Y', KeyCode(char='z'): b'Z',
+        KeyCode(char='1'): b'1', KeyCode(char='2'): b'2', KeyCode(char='3'): b'3',
+        KeyCode(char='4'): b'4', KeyCode(char='5'): b'5', KeyCode(char='6'): b'6',
+        KeyCode(char='7'): b'7', KeyCode(char='8'): b'8', KeyCode(char='9'): b'9',
+        KeyCode(char='0'): b'0',
+    }
+    if key in key_actions:
+        ser.write(key_actions[key] + b"\n")
+
+# ===================== UI 更新 =====================
+def update_ui_for_service_stopped():
+    start_btn.config(state=tk.NORMAL)
+    stop_btn.config(state=tk.DISABLED)
+    port_combobox.config(state=tk.NORMAL)
+    res_entry.config(state=tk.NORMAL)
+    get_res_btn.config(state=tk.NORMAL)
+
+def update_ui_for_service_started():
+    start_btn.config(state=tk.DISABLED)
+    stop_btn.config(state=tk.NORMAL)
+    port_combobox.config(state=tk.DISABLED)
+    res_entry.config(state=tk.DISABLED)
+    get_res_btn.config(state=tk.DISABLED)
+
+def update_mode_display(mode_text):
+    mode_status_label.config(text=mode_text)
+    if "互动" in mode_text:
+        mode_status_label.config(foreground="green")
+    else:
+        mode_status_label.config(foreground="red")
+
+# ===================== 嘴巴 & 脖子开关控制（并保存配置） =====================
+def toggle_mouth():
+    global mouth_active
+    mouth_active = not mouth_active
+    if mouth_active:
+        mouth_btn.config(text="嘴巴正在互动", foreground="green")
+    else:
+        mouth_btn.config(text="嘴巴停止互动", foreground="red")
+    # 实时保存配置
+    save_config(port_combobox.get().strip(), res_entry.get().strip(), mouth_active, neck_active)
+
+def toggle_neck():
+    global neck_active
+    neck_active = not neck_active
+    if neck_active:
+        neck_btn.config(text="脖子正在互动", foreground="green")
+    else:
+        neck_btn.config(text="脖子停止互动", foreground="red")
+    save_config(port_combobox.get().strip(), res_entry.get().strip(), mouth_active, neck_active)
+
+# ===================== 串口与监听服务管理 =====================
+def start_service():
+    global ser, mouse_listener, key_listener, service_active, ORIGIN_X_MIN, ORIGIN_X_MAX, ORIGIN_Y_MIN, ORIGIN_Y_MAX, interaction_enabled
+
+    selected_port = port_combobox.get().strip()
+    if not selected_port:
+        messagebox.showerror("错误", "请选择串口端口号！")
+        return False
+
+    try:
+        res_text = res_entry.get().strip()
+        w_str, h_str = res_text.lower().split('x')
+        width = int(w_str)
+        height = int(h_str)
+    except:
+        messagebox.showerror("格式错误", "分辨率格式：宽x高\n示例：1920x1080")
+        return False
+
+    if width <= 0 or height <= 0:
+        messagebox.showerror("错误", "宽高必须大于0！")
+        return False
+
+    ORIGIN_X_MIN = 0
+    ORIGIN_X_MAX = width - 1
+    ORIGIN_Y_MIN = 0
+    ORIGIN_Y_MAX = height - 1
+
+    try:
+        ser = serial.Serial(selected_port, BAUDRATE, timeout=1)
+        time.sleep(2)
+        if not ser.is_open:
+            raise Exception("串口未成功打开")
+    except Exception as e:
+        messagebox.showerror("串口错误", f"端口{selected_port}打开失败：\n{str(e)}")
+        return False
+
+    service_active = True
+    update_interaction_by_process()
+
+    mouse_listener = Listener(on_move=on_move, on_click=on_click, on_scroll=on_scroll)
+    mouse_listener.daemon = True
+    mouse_listener.start()
+
+    key_listener = KeyListener(on_press=on_press)
+    key_listener.daemon = True
+    key_listener.start()
+
+    update_ui_for_service_started()
+
+    tip_text = (
+        f"互动模式已启用！\n"
+        f"当前模式：{'摆件模式' if not interaction_enabled else '互动模式'}\n\n"
+        f"嘴巴开关：{'正在互动' if mouth_active else '停止互动'}\n"
+        f"脖子开关：{'正在互动' if neck_active else '停止互动'}"
+    )
+    messagebox.showinfo("成功", tip_text)
+    return True
+
+def stop_service():
+    global ser, mouse_listener, key_listener, service_active, interaction_enabled
+    if not service_active:
+        messagebox.showinfo("提示", "监听服务未运行")
+        return
+    service_active = False
+    interaction_enabled = False
+    if mouse_listener and mouse_listener.is_alive():
+        mouse_listener.stop()
+    if key_listener and key_listener.is_alive():
+        key_listener.stop()
+    if ser and ser.is_open:
+        ser.close()
+        ser = None
+    update_ui_for_service_stopped()
+    update_mode_display("摆件模式")
+    messagebox.showinfo("提示", "互动已停止，切换为摆件模式")
+
+def update_interaction_by_process():
+    global interaction_enabled
+    target_running = is_any_target_running()
+    if target_running is None:
+        interaction_enabled = False
+        root.after(0, lambda: update_mode_display("摆件模式（进程检测异常）"))
+        return
+    if target_running:
+        interaction_enabled = False
+        root.after(0, lambda: update_mode_display("摆件模式"))
+    else:
+        interaction_enabled = True
+        root.after(0, lambda: update_mode_display("互动模式"))
+
+def is_any_target_running():
+    target_set = {p.lower() for p in MONITOR_PROCESSES}
+    if not target_set:
+        return False
+    try:
+        for proc in psutil.process_iter(['name']):
+            if proc.info['name'] and proc.info['name'].lower() in target_set:
+                return True
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        pass
+    except Exception:
+        return None
+    return False
+
+def check_processes():
+    if service_active:
+        update_interaction_by_process()
+    root.after(2000, check_processes)
+
+def manual_start():
+    if not start_service():
+        return
+    if not hasattr(root, "_monitor_started"):
+        root._monitor_started = True
+        root.after(0, check_processes)
+
+def manual_stop():
+    stop_service()
+
+# ===================== GUI =====================
+def create_gui():
+    global root, start_btn, stop_btn, port_combobox, res_entry, get_res_btn, mode_status_label
+    global mouth_btn, neck_btn, mouth_active, neck_active
+
+    # 加载配置
+    saved_port, saved_res, saved_mouth, saved_neck = load_config()
+    mouth_active = saved_mouth
+    neck_active = saved_neck
+
+    root = tk.Tk()
+    root.title("键鼠串口映射工具")
+    root.geometry("580x580")
+    root.minsize(580, 550)
+    root.resizable(True, True)
+
+    style = ttk.Style()
+    style.configure(".", font=("微软雅黑", 12))
+    style.configure("TButton", font=("微软雅黑", 12), padding=8)
+    style.configure("TEntry", font=("微软雅黑", 12))
+    style.configure("TCombobox", font=("微软雅黑", 12))
+
+    # 串口配置
+    port_frame = ttk.LabelFrame(root, text="串口配置", padding=(15,12))
+    port_frame.pack(fill=tk.X, padx=25, pady=12)
+    ttk.Label(port_frame, text="串口端口：").grid(row=0, column=0, padx=10, pady=10)
+    port_list = [f"COM{i}" for i in range(1,11)]
+    port_combobox = ttk.Combobox(port_frame, values=port_list, width=22)
+    port_combobox.grid(row=0, column=1, padx=10, pady=10)
+    port_combobox.set(saved_port)
+
+    # 分辨率
+    res_frame = ttk.LabelFrame(root, text="鼠标分辨率设置（Windows标准格式）", padding=(15,12))
+    res_frame.pack(fill=tk.X, padx=25, pady=12)
+    ttk.Label(res_frame, text="分辨率：").grid(row=0, column=0, padx=10, pady=10)
+    res_entry = ttk.Entry(res_frame, width=25)
+    res_entry.grid(row=0, column=1, padx=10, pady=10)
+    res_entry.insert(0, saved_res)
+    get_res_btn = ttk.Button(res_frame, text="一键获取当前屏幕分辨率", command=auto_fill_resolution)
+    get_res_btn.grid(row=0, column=2, padx=10, pady=10)
+    ttk.Label(res_frame, text="格式示例：1920x1080  /  1280x720").grid(row=1, column=0, columnspan=3, sticky="w", padx=10, pady=5)
+
+    # 控制按钮
+    btn_frame = ttk.Frame(root, padding=(15,12))
+    btn_frame.pack(fill=tk.X, padx=25, pady=12)
+    start_btn = ttk.Button(btn_frame, text="启用互动", command=manual_start, width=18)
+    start_btn.grid(row=0, column=0, padx=20, pady=8)
+    stop_btn = ttk.Button(btn_frame, text="停止互动", command=manual_stop, width=18, state=tk.DISABLED)
+    stop_btn.grid(row=0, column=1, padx=20, pady=8)
+
+    # 嘴巴和脖子独立开关
+    switch_frame = ttk.Frame(root, padding=(15,12))
+    switch_frame.pack(fill=tk.X, padx=25, pady=5)
+
+    mouth_btn = tk.Button(switch_frame, text="", fg="red", font=("微软雅黑", 12),
+                          command=toggle_mouth, width=18, relief=tk.RAISED, bd=2)
+    # 根据加载的状态设置按钮文字和颜色
+    if mouth_active:
+        mouth_btn.config(text="嘴巴正在互动", foreground="green")
+    else:
+        mouth_btn.config(text="嘴巴停止互动", foreground="red")
+    mouth_btn.grid(row=0, column=0, padx=20, pady=8)
+
+    neck_btn = tk.Button(switch_frame, text="", fg="red", font=("微软雅黑", 12),
+                         command=toggle_neck, width=18, relief=tk.RAISED, bd=2)
+    if neck_active:
+        neck_btn.config(text="脖子正在互动", foreground="green")
+    else:
+        neck_btn.config(text="脖子停止互动", foreground="red")
+    neck_btn.grid(row=0, column=1, padx=20, pady=8)
+
+    # 模式状态显示
+    status_frame = ttk.Frame(root, padding=(15,5))
+    status_frame.pack(fill=tk.X, padx=25, pady=5)
+    ttk.Label(status_frame, text="当前模式：").pack(side=tk.LEFT)
+    mode_status_label = ttk.Label(status_frame, text="摆件模式", foreground="red")
+    mode_status_label.pack(side=tk.LEFT, padx=5)
+
+    def on_closing():
+        current_port = port_combobox.get().strip()
+        current_res = res_entry.get().strip()
+        # 保存当前状态（包括嘴巴、脖子）
+        save_config(current_port, current_res, mouth_active, neck_active)
+        if service_active:
+            stop_service()
+        root.destroy()
+
+    root.protocol("WM_DELETE_WINDOW", on_closing)
+    root.mainloop()
+
+def auto_fill_resolution():
+    current_res = get_screen_resolution()
+    res_entry.delete(0, tk.END)
+    res_entry.insert(0, current_res)
+    messagebox.showinfo("提示", f"已自动填充当前屏幕分辨率：{current_res}")
+
+if __name__ == "__main__":
+    create_gui()
