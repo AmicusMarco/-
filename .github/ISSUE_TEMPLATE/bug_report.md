@@ -1,38 +1,44 @@
 ---
-name: Bug report
-about: Create a report to help us improve
-title: ''
-labels: ''
-assignees: ''
+名称：BUG report
+关于：创建一份报告以帮助我们改进
+标题：'BUG反馈/BUG report'
+
+标签：'BUG'
+
+反馈人员：''
 
 ---
 
-**Describe the bug**
-A clear and concise description of what the bug is.
+**描述错误**
 
-**To Reproduce**
-Steps to reproduce the behavior:
-1. Go to '...'
-2. Click on '....'
-3. Scroll down to '....'
-4. See error
+请清晰简洁地描述您遇到的错误。
 
-**Expected behavior**
-A clear and concise description of what you expected to happen.
+**重现步骤**
 
-**Screenshots**
-If applicable, add screenshots to help explain your problem.
+重现此问题的步骤：
 
-**Desktop (please complete the following information):**
- - OS: [e.g. iOS]
- - Browser [e.g. chrome, safari]
- - Version [e.g. 22]
+1. 前往“...”
 
-**Smartphone (please complete the following information):**
- - Device: [e.g. iPhone6]
- - OS: [e.g. iOS8.1]
- - Browser [e.g. stock browser, safari]
- - Version [e.g. 22]
+2. 点击“...”
 
-**Additional context**
-Add any other context about the problem here.
+3. 向下滚动至“...”
+
+4. 查看错误
+
+**预期行为**
+
+请清晰简洁地描述您预期发生的情况。
+
+**屏幕截图**
+
+如有必要，请添加屏幕截图以帮助说明您的问题。
+
+**桌面端（请填写以下信息）：**
+
+- 系统版本：[例如 windows 7/10/11（专业版/家庭版）]
+
+- 鼠标：[例如 某鼠标型号i]
+
+- 键盘：[例如 某键盘型号]
+- 
+请在此处添加与问题相关的其他信息。
