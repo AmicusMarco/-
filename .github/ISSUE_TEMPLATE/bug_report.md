@@ -1,47 +1,38 @@
---- 名称：BUG report
-
-关于：创建报告以帮助我们改进
-
-标题：''
-
-标签：''
-
-反馈人联系方式：''
+---
+name: Bug report
+about: Create a report to help us improve
+title: ''
+labels: ''
+assignees: ''
 
 ---
 
-**错误描述**
+**Describe the bug**
+A clear and concise description of what the bug is.
 
-清晰简洁地描述错误所在。
+**To Reproduce**
+Steps to reproduce the behavior:
+1. Go to '...'
+2. Click on '....'
+3. Scroll down to '....'
+4. See error
 
-**重现步骤**
+**Expected behavior**
+A clear and concise description of what you expected to happen.
 
-重现此行为的步骤：
+**Screenshots**
+If applicable, add screenshots to help explain your problem.
 
-1. 转到“...”
+**Desktop (please complete the following information):**
+ - OS: [e.g. iOS]
+ - Browser [e.g. chrome, safari]
+ - Version [e.g. 22]
 
-2. 点击“...”
+**Smartphone (please complete the following information):**
+ - Device: [e.g. iPhone6]
+ - OS: [e.g. iOS8.1]
+ - Browser [e.g. stock browser, safari]
+ - Version [e.g. 22]
 
-3. 向下滚动到“...”
-
-4. 查看错误
-
-**预期行为**
-
-清晰简洁地描述您预期发生的情况。
-
-**屏幕截图**
-
-如果适用，请添加屏幕截图以帮助说明您的问题。
-
-**桌面端（请填写以下信息）：**
-
-- 操作系统：[例如 windows7/10/11]
-
-- 系统类型：[可对此电脑/我的电脑右键属性查看当前系统版本例如：（家庭版/中文版）]
-
-- 版本：[可对此电脑/我的电脑右键属性查看当前系统版本号例如：26200.9168]
-
-**其他信息**
-
-请在此处添加与问题相关的其他信息。
+**Additional context**
+Add any other context about the problem here.
