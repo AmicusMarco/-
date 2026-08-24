@@ -1,35 +1,3 @@
-# ============================================================================
-# 布鲁斯控制台 V4.0 - 软件许可协议
-# ============================================================================
-# 版权所有 (c) 2026 Marco/AmicusMarco
-# 布鲁斯互动摆件版权: 隔墙有耳 (QQ: 1842364889 / 626682642)
-# ----------------------------------------------------------------------------
-# 【授权范围】您可以自由地:
-#   1. 下载: 以任何形式下载源代码或编译版本
-#   2. 修改: 出于个人学习、研究或非商业目的进行修改/改编/二次创作
-#   3. 分发: 分享原始或修改版本 (须遵守下方"分发条件")
-# ----------------------------------------------------------------------------
-# 【禁止事项】您不得:
-#   1. 商业使用: 严禁销售/订阅/广告变现/企业生产用途 (书面授权除外)
-#   2. 删除署名: 严禁移除/篡改原作者版权声明及许可证文本
-#   3. 闭源分发: 修改后分发必须以相同方式开源, 禁止加密/加壳
-#   4. 技术规避: 严禁绕过上述限制的技术处理
-# ----------------------------------------------------------------------------
-# 【分发条件】分享时必须:
-#   1. 保留署名: 标注 "布鲁斯控制台 - 原作者: Marco/AmicusMarco"
-#   2. 附带协议: 随附本许可证全文或链接
-#（https://github.com/AmicusMarco/Bruce-Control/tree/main?tab=License-1-ov-file）
-#   3. 声明修改: 在显著位置说明修改内容与日期
-#   4. 相同共享: 衍生作品须以同样方式开源且禁止商用
-# ----------------------------------------------------------------------------
-# 【免责声明】
-#   本软件按"原样"提供, 无任何明示或暗示保证。
-#   作者不对因使用本软件产生的任何直接或间接损害承担责任。
-# ----------------------------------------------------------------------------
-# 【联系方式】
-#   作者: w243643896@vip.qq.com / QQ: 243643896
-#   摆件版权方: 隔墙有耳 QQ: 1842364889 / 626682642
-# ============================================================================
 #====================== Mod by Maco =====================
 import sys
 import os
@@ -39,6 +7,7 @@ import random
 import logging
 import threading
 import queue
+import subprocess
 import ctypes
 import winreg
 from ctypes import wintypes
@@ -437,7 +406,6 @@ _VK_TO_KEYNAME = {
 }
 
 class _RawKey:
-    """Raw Input 按键对象，兼容 key_to_str() 和 on_press() 逻辑。"""
     __slots__ = ('char', 'name', 'vk')
     def __init__(self, char=None, name=None, vk=None):
         self.char = char
@@ -447,7 +415,6 @@ class _RawKey:
 _kb_layout_cache = None
 
 def _vk_to_rawkey(vk, scan_code=0):
-    """将虚拟键码转换为 _RawKey 对象。"""
     if vk in (0x10, 0xA0, 0xA1):
         return _RawKey(name="shift", vk=vk)
     if vk in (0x11, 0xA2, 0xA3):
@@ -523,7 +490,6 @@ EXPR_RESTORE_ACTIONS = {
 }
 
 def mouse_button_to_str(button):
-    """将 pynput 鼠标 Button 枚举转为字符串标识"""
     try:
         name = button.name.lower()
         if name == "left":
@@ -1305,7 +1271,6 @@ _BLOCKING_TARGETS = frozenset(
 )
 
 def get_blocking_targets():
-    """返回当前所有拦截进程名集合（内置 - 已禁用 + 用户自定义）。"""
     disabled = config_data.get("disabled_builtin_processes", [])
     if not isinstance(disabled, list):
         disabled = []
@@ -1854,7 +1819,6 @@ _mouse_watchdog_running = False
 _mouse_watchdog_thread = None
 
 def _mouse_watchdog():
-    """看门狗：检测鼠标钩子线程是否失效，自动重启。"""
     global _mouse_watchdog_running
     while _mouse_watchdog_running:
         time.sleep(10)  # 优化：从5秒增加到10秒，降低CPU唤醒频率
@@ -1981,6 +1945,7 @@ def on_move(x, y):
     if not state.service_active or not state.interaction_enabled or state.hardware_overloaded:
         return
     
+    # 优化：先用 pynput 坐标做阈值判断，减少系统 API 调用
     # 只有当 pynput 坐标显示移动超过阈值时，才获取系统级精确坐标
     if not _cursor_really_moved(x, y):
         return
@@ -2123,6 +2088,8 @@ def on_press(key):
         _main_thread_call(lambda c=combo: binding_cb(c))
         return
 
+    # ---- 读取状态（优化：直接引用 keybinds 字典，减少拷贝开销）----
+    # keybinds 在互动模式下是只读的，无需 copy，减少 GC 压力
     with state.lock:
         kb = state.keybinds
         service_active = state.service_active
@@ -2143,6 +2110,7 @@ def on_press(key):
     combo = build_combo_str(key_str, mods_snapshot)
 
     # ---- 快捷开关热键（不依赖互动状态，只要有键盘监听即可触发）----
+    # 优化：只添加已绑定的键，避免 None/空键
     toggle_map = {}
     for _action in ("toggle_mouth", "toggle_keyboard_mouth", "toggle_neck",
                     "toggle_eye_input", "toggle_service"):
@@ -2432,7 +2400,6 @@ class ModernToggle(tk.Frame):
                                    style=tk.ARC, outline=outline, width=1)
 
     def _draw(self):
-        """使用原生 Canvas 绘制，避免 PIL 开销（性能优化）"""
         self._draw_canvas()
 
     def _draw_pil(self):
@@ -2586,7 +2553,6 @@ class ModernButton(tk.Frame):
 
 
 class RoundedButton(tk.Canvas):
-
     def __init__(self, parent, text, command=None, width=220, height=46,
                  radius=14, bg=None, fg=None, hover_bg=None,
                  disabled_bg=None, disabled_fg=None,
@@ -2620,7 +2586,6 @@ class RoundedButton(tk.Canvas):
             self.bind("<Configure>", self._on_configure)
 
     def _on_configure(self, event):
-        """窗口大小变化时重新绘制按钮以适应新宽度"""
         if event.width > 10 and event.width != self._width:
             self._width = event.width
             self._draw_button()
@@ -2636,7 +2601,6 @@ class RoundedButton(tk.Canvas):
         draw.pieslice([x2 - 2 * radius, y2 - 2 * radius, x2, y2], 0, 90, fill=fill)
 
     def _draw_button(self):
-        """使用原生 Canvas 绘制圆角按钮，避免 PIL 开销（性能优化）"""
         self.delete("all")
         if self._disabled:
             fill = self._disabled_bg
@@ -2784,7 +2748,6 @@ def toggle_expr_auto_restore():
     KeybindWindow.update_all_auto_restore_state(active)
 
 def toggle_eco_qos():
-    """切换 EcoQoS 效率模式"""
     if not is_eco_qos_supported():
         return
     current = config_data.get("eco_qos_enabled", False)
@@ -2801,7 +2764,6 @@ def toggle_eco_qos():
         pass
 
 def _sync_eco_qos_toggle():
-    """同步 EcoQoS 开关 UI 状态与实际生效状态（供 init_tasks 后台线程调用）"""
     try:
         if eco_qos_toggle is not None:
             eco_qos_toggle.set_active(is_eco_qos_active())
@@ -2870,7 +2832,6 @@ def _get_work_area():
         return 0, 0, win.winfo_screenwidth(), win.winfo_screenheight()
 
 def place_window_right_of_main(win, width, height, offset_y=40):
-    """将窗口放置在主窗口右侧；若右侧空间不足则放左侧；始终保证在屏幕内"""
     try:
         root.update_idletasks()
         main_x = root.winfo_rootx()
@@ -2908,7 +2869,6 @@ class ResolutionSelectWindow:
 
     @classmethod
     def get_or_create(cls, parent, callback):
-        """单例：若已有打开的窗口则聚焦，否则新建"""
         if cls._active_instance is not None:
             inst = cls._active_instance
             try:
@@ -2924,7 +2884,6 @@ class ResolutionSelectWindow:
         return inst
 
     def _clear_active(self):
-        """窗口关闭时清理单例引用"""
         if ResolutionSelectWindow._active_instance is self:
             ResolutionSelectWindow._active_instance = None
 
@@ -3234,7 +3193,6 @@ class KeybindWindow:
         self.clear_btns[action] = clr_btn
 
     def _apply_dlc_state(self):
-        """根据 DLC 开关状态启用/禁用表情快捷键的修改和清除按钮"""
         btn_state = tk.NORMAL if self.dlc_on else tk.DISABLED
         for action in self.expr_action_keys:
             if action in self.modify_btns:
@@ -3257,14 +3215,12 @@ class KeybindWindow:
 
     @classmethod
     def update_all_dlc_state(cls, dlc_on):
-        """DLC 开关切换时同步所有已打开的 KeybindWindow"""
         for inst in cls._active_instances:
             inst.dlc_on = dlc_on
             inst._apply_dlc_state()
 
     @classmethod
     def update_all_auto_restore_state(cls, auto_restore_on):
-        """自动恢复表情开关切换时同步所有已打开的 KeybindWindow"""
         for inst in cls._active_instances:
             inst.auto_restore_on = auto_restore_on
             try:
@@ -3764,7 +3720,6 @@ class ProcessManagerWindow:
 
     @classmethod
     def get_or_create(cls, parent):
-        """单例：若已有打开的窗口则聚焦，否则新建"""
         if cls._instance is not None:
             try:
                 if cls._instance.win.winfo_exists():
@@ -4033,7 +3988,6 @@ def stop_service():
 PROCESS_MONITOR_INTERVAL = 2.5  # 秒，监视轮询间隔（已优化：从1.5s增加，降低CPU唤醒频率）
 
 def find_blocking_process():
-    """优化版：更高效的进程检测，减少 psutil 开销（性能优化）"""
     try:
         targets = get_blocking_targets()
         if not targets:
@@ -4147,7 +4101,6 @@ def get_screen_resolution():
     return f"{w}x{h}"
 
 def apply_resolution_change(res_str, ox=0, oy=0):
-    """统一处理分辨率变更：更新输入框、配置文件，若服务运行中则实时更新映射区域。"""
     res_entry.delete(0, tk.END)
     res_entry.insert(0, res_str)
     config_data["resolution"] = res_str
@@ -4587,7 +4540,6 @@ def create_gui():
     tip_label_dlc.pack(pady=(2, 0))
 
     def _show_close_dialog():
-        """显示关闭确认对话框，返回 (action, remember) 或 (None, False)"""
         dialog = tk.Toplevel(root)
         dialog.title("关闭确认")
         dialog.resizable(False, False)
@@ -4708,6 +4660,150 @@ def create_gui():
     root.protocol("WM_DELETE_WINDOW", on_closing)
     root.bind("<Unmap>", lambda e: on_window_minimize() if root.state() == 'iconic' else None)
 
+    # ==================== 证书验证与安装 ====================
+    CERT_FILE = os.path.join(BASE_DIR, "BruceConsole_cert.cer")
+    CERT_THUMBPRINT = "BCDD1DF695F520999F3C0D4E41CD2451381B50FA"
+    CERT_SUBJECT = "CN=Amicus&Marco, E=w243643896@vip.qq.com"
+
+    def _is_cert_in_root_store():
+        """检查内置证书是否已安装在当前用户的受信任根证书颁发机构中
+        Returns: True=已安装, False=未安装/检查失败
+        """
+        try:
+            ps_script = r'''
+            $ErrorActionPreference = "Stop"
+            $thumbprint = $args[0]
+            $store = New-Object System.Security.Cryptography.X509Certificates.X509Store(
+                [System.Security.Cryptography.X509Certificates.StoreName]::Root,
+                [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
+            $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadOnly)
+            $found = $store.Certificates.Find(
+                [System.Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
+                $thumbprint, $false)
+            $store.Close()
+            if ($found.Count -gt 0) {
+                Write-Output "TRUSTED"
+            } else {
+                Write-Output "NOT_TRUSTED"
+            }
+    '''
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps_script, CERT_THUMBPRINT],
+                capture_output=True, text=True, timeout=10, creationflags=0x08000000
+            )
+            return "TRUSTED" in result.stdout
+        except Exception:
+            return False
+
+    def _install_cert_to_root(cert_path):
+        """将证书安装到受信任的根证书颁发机构（当前用户）
+        Returns: (success, error_msg)
+        """
+        try:
+            result = subprocess.run(
+                ["certutil", "-user", "-addstore", "Root", cert_path],
+                capture_output=True, text=True, timeout=30, creationflags=0x08000000
+            )
+            if result.returncode == 0:
+                return True, None
+            else:
+                return False, result.stderr.strip() or result.stdout.strip()
+        except subprocess.TimeoutExpired:
+            return False, "安装超时"
+        except Exception as e:
+            return False, str(e)
+
+    def check_and_prompt_certificate():
+        """启动时检查内置证书是否在受信任根中，未安装则提示用户安装"""
+        if not os.path.exists(CERT_FILE):
+            logger.debug("[证书] 证书文件不存在，跳过检查")
+            return
+
+        if _is_cert_in_root_store():
+            logger.info(f"[证书] 已受信任: {CERT_SUBJECT}")
+            return
+
+        logger.warning("[证书] 证书尚未安装到受信任的根证书颁发机构")
+
+        def show_cert_dialog():
+            dialog = tk.Toplevel(root)
+            dialog.title("证书信任提示")
+            dialog.resizable(False, False)
+            dialog.transient(root)
+            dialog.configure(bg=COLORS["bg"])
+            dialog.geometry("420x300")
+            dialog.grab_set()
+
+            dialog.update_idletasks()
+            dx = root.winfo_x() + (root.winfo_width() - 420) // 2
+            dy = root.winfo_y() + (root.winfo_height() - 300) // 2
+            dialog.geometry(f"+{dx}+{dy}")
+
+            try:
+                if os.path.exists(ICON_FILE):
+                    dialog.iconbitmap(ICON_FILE)
+            except Exception:
+                pass
+
+            tk.Label(dialog, text="🔐  证书信任提示",
+                     font=("思源真黑体", 13, "bold"),
+                     fg=COLORS["accent"], bg=COLORS["bg"]).pack(pady=(16, 10))
+
+            info_frame = tk.Frame(dialog, bg=COLORS["card"], padx=14, pady=12)
+            info_frame.pack(fill=tk.X, padx=20)
+
+            tk.Label(info_frame, text="软件根证书尚未安装到受信任的\n根证书颁发机构。",
+                     font=("思源真黑体", 9), fg=COLORS["text"],
+                     bg=COLORS["card"], justify="left", wraplength=360).pack(anchor="w")
+            tk.Label(info_frame, text="颁发者：Amicus&Marco",
+                     font=("Consolas", 8), fg=COLORS["text_muted"],
+                     bg=COLORS["card"], anchor="w").pack(fill=tk.X, pady=(8, 0))
+            tk.Label(info_frame, text="指纹：BCDD1DF6...1B50FA",
+                     font=("Consolas", 8), fg=COLORS["text_muted"],
+                     bg=COLORS["card"], anchor="w").pack(fill=tk.X, pady=(2, 0))
+            tk.Label(info_frame, text="有效期：2026/08/24 ~ 2036/08/24",
+                     font=("Consolas", 8), fg=COLORS["text_muted"],
+                     bg=COLORS["card"], anchor="w").pack(fill=tk.X, pady=(2, 0))
+
+            tk.Label(dialog,
+                     text="安装后 Windows 将信任此软件签名，\n可提升系统兼容性和安全性。",
+                     font=("思源真黑体", 8), fg=COLORS["text_dim"],
+                     bg=COLORS["bg"], justify="center").pack(pady=(10, 6))
+
+            btn_frame = tk.Frame(dialog, bg=COLORS["bg"])
+            btn_frame.pack(pady=8)
+
+            def on_install():
+                success, err_msg = _install_cert_to_root(CERT_FILE)
+                if success:
+                    messagebox.showinfo("安装成功", "证书已成功安装到受信任的根证书颁发机构。", parent=dialog)
+                    logger.info("[证书] 已安装到受信任的根证书颁发机构")
+                else:
+                    messagebox.showerror("安装失败", f"证书安装失败：\n{err_msg}", parent=dialog)
+                    logger.warning(f"[证书] 安装失败: {err_msg}")
+                dialog.destroy()
+
+            def on_skip():
+                logger.info("[证书] 用户跳过证书安装")
+                dialog.destroy()
+
+            RoundedButton(btn_frame, text="📥  安装证书", command=on_install,
+                          width=120, height=34, radius=10,
+                          bg=COLORS["accent"], fg="#0A0E1A",
+                          hover_bg=COLORS["accent_dim"],
+                          font=("思源真黑体", 9, "bold"),
+                          canvas_bg=COLORS["bg"]).pack(side=tk.LEFT, padx=(0, 6))
+            RoundedButton(btn_frame, text="以后再说", command=on_skip,
+                          width=100, height=34, radius=10,
+                          bg=COLORS["btn"], fg=COLORS["text"],
+                          hover_bg=COLORS["btn_hover"],
+                          font=("思源真黑体", 9),
+                          canvas_bg=COLORS["bg"]).pack(side=tk.LEFT, padx=(6, 0))
+
+            dialog.protocol("WM_DELETE_WINDOW", on_skip)
+
+        _main_thread_call(show_cert_dialog)
+
     # ==================== 启动任务 ====================
     def init_tasks():
         setup_tray()
@@ -4715,6 +4811,9 @@ def create_gui():
         _install_power_event_monitor()
         sync_input_hooks()
         _start_mouse_watchdog()
+
+        # 证书信任验证（后台线程执行，不阻塞启动）
+        threading.Thread(target=check_and_prompt_certificate, daemon=True).start()
 
         def delayed_refresh():
             refresh_ports()
