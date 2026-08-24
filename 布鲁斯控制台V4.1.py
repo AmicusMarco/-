@@ -56,7 +56,7 @@ except Exception:
         pass
 
 
-# ===================== EcoQoS 效率模式 =====================
+# ===================== 效率模式 =====================
 # Windows 10 20H2+ (Build >= 19041) / Windows 11 支持
 # 开启后进程以节能模式运行，降低电量消耗和CPU温度
 # 任务管理器中会显示叶子图标 🍃
@@ -83,6 +83,7 @@ _eco_qos_original_priority = _NORMAL_PRIORITY_CLASS
 _eco_qos_kernel32 = None
 
 def _open_process_handle():
+    """获取当前进程真实句柄"""
     kernel32 = _eco_qos_kernel32 or ctypes.windll.kernel32
     pid = kernel32.GetCurrentProcessId()
     return kernel32.OpenProcess(
@@ -91,6 +92,9 @@ def _open_process_handle():
     )
 
 def _detect_eco_qos():
+    """实际调用 SetProcessInformation 检测是否支持 （最可靠方式）
+    注意：此函数不依赖 logger，可在模块早期安全调用
+    """
     global _eco_qos_checked, _eco_qos_supported, _eco_qos_kernel32
     if _eco_qos_checked:
         return _eco_qos_supported
@@ -101,7 +105,7 @@ def _detect_eco_qos():
             _eco_qos_supported = False
             return False
         _eco_qos_kernel32 = kernel32
-        # 必须使用 OpenProcess 获取真实句柄，GetCurrentProcess() 伪句柄不适用
+        # OpenProcess 获取真实句柄
         h_proc = _open_process_handle()
         if not h_proc:
             _eco_qos_supported = False
@@ -117,7 +121,7 @@ def _detect_eco_qos():
                 ctypes.byref(state), ctypes.sizeof(state)
             )
             if result:
-                # 验证成功，先关闭 EcoQoS，等待正式配置
+                # 验证成功，先关闭 ，等待正式配置
                 state.StateMask = 0
                 kernel32.SetProcessInformation(
                     h_proc, _ProcessPowerThrottling,
@@ -135,12 +139,20 @@ def _detect_eco_qos():
         return False
 
 def is_eco_qos_supported() -> bool:
+    """当前系统是否支持 效率模式"""
     return _detect_eco_qos()
 
 def is_eco_qos_active() -> bool:
+    """当前是否已处于 效率模式"""
     return _eco_qos_active
 
 def set_eco_qos(enable: bool) -> bool:
+    """开启或关闭当前进程的 效率模式
+    开启时同时设置 IDLE_PRIORITY_CLASS，任务管理器将显示 🍃 叶子图标
+    
+    Returns:
+        bool: 是否设置成功
+    """
     global _eco_qos_active, _eco_qos_original_priority
     if not _detect_eco_qos():
         return False
@@ -179,7 +191,7 @@ def set_eco_qos(enable: bool) -> bool:
             kernel32.CloseHandle(h_proc)
     except Exception as e:
         try:
-            logger.warning(f"EcoQoS 设置失败: {e}")
+            logger.warning(f"设置失败: {e}")
         except Exception:
             pass
         return False
@@ -406,6 +418,7 @@ _VK_TO_KEYNAME = {
 }
 
 class _RawKey:
+    """Raw Input 按键对象，兼容 key_to_str() 和 on_press() 逻辑。"""
     __slots__ = ('char', 'name', 'vk')
     def __init__(self, char=None, name=None, vk=None):
         self.char = char
@@ -415,6 +428,7 @@ class _RawKey:
 _kb_layout_cache = None
 
 def _vk_to_rawkey(vk, scan_code=0):
+    """将虚拟键码转换为 _RawKey 对象。"""
     if vk in (0x10, 0xA0, 0xA1):
         return _RawKey(name="shift", vk=vk)
     if vk in (0x11, 0xA2, 0xA3):
@@ -490,6 +504,7 @@ EXPR_RESTORE_ACTIONS = {
 }
 
 def mouse_button_to_str(button):
+    """将 pynput 鼠标 Button 枚举转为字符串标识"""
     try:
         name = button.name.lower()
         if name == "left":
@@ -508,6 +523,7 @@ def mouse_button_to_str(button):
         return None
 
 def get_action_command(action, neck_active=False, mouth_active=False):
+    """根据动作名获取串口指令，考虑条件开关"""
     if action in EXPR_ACTION_COMMANDS:
         return EXPR_ACTION_COMMANDS[action]
     if action == "heart":
@@ -1032,6 +1048,7 @@ class ConfigManager:
 
     @staticmethod
     def save(config: dict):
+        """原子写入配置"""
         temp_file = CONFIG_FILE + ".tmp"
         try:
             with open(temp_file, "w", encoding="utf-8") as f:
@@ -1073,12 +1090,13 @@ class ConfigManager:
             log_error(f"设置开机自启失败: {e}")
 
 
-# ===================== 配置保存防抖 =====================
+# ===================== 延迟保存配置 =====================
 # 避免用户快速点击开关导致频繁磁盘 I/O
 _save_debounce_timer = None
 _save_debounce_lock = threading.Lock()
 
 def schedule_config_save(delay=0.5):
+    """延迟保存配置"""
     global _save_debounce_timer
     with _save_debounce_lock:
         if _save_debounce_timer is not None:
@@ -1088,15 +1106,17 @@ def schedule_config_save(delay=0.5):
         _save_debounce_timer.start()
 
 def _do_debounced_save():
+    """执行实际的配置保存"""
     global _save_debounce_timer
     with _save_debounce_lock:
         _save_debounce_timer = None
     try:
         ConfigManager.save(config_data)
     except Exception as e:
-        log_error(f"防抖保存配置失败: {e}")
+        log_error(f"延迟保存配置失败: {e}")
 
 def flush_config_save():
+    """立即执行待执行的保存操作（程序退出时调用）"""
     global _save_debounce_timer
     with _save_debounce_lock:
         if _save_debounce_timer is not None:
@@ -1271,6 +1291,7 @@ _BLOCKING_TARGETS = frozenset(
 )
 
 def get_blocking_targets():
+    """返回当前所有拦截进程名集合（内置 - 已禁用 + 用户自定义）。"""
     disabled = config_data.get("disabled_builtin_processes", [])
     if not isinstance(disabled, list):
         disabled = []
@@ -1351,6 +1372,8 @@ def stop_serial_worker():
     logger.info("串口发送线程已停止")
 
 def safe_serial_write(data, force=False):
+    """将数据放入串口发送队列。force=True时忽略序列锁。
+    优化：快速检查前置，减少锁获取次数，降低竞争。"""
     if isinstance(data, str):
         data = data.encode()
     
@@ -1396,6 +1419,7 @@ ZZ_BUFFER_TIMEOUT = 0.5
 MOMO_BUFFER_TIMEOUT = 0.5
 
 def _flush_zz_buffer():
+    """ZZ缓冲超时：显示缓冲的z（仅发送显示字符，不发送任何额外命令）"""
     with state.lock:
         if not state.zz_pending:
             return
@@ -1404,6 +1428,7 @@ def _flush_zz_buffer():
     safe_serial_write(b"Z\n")
 
 def _flush_momo_buffer():
+    """momo缓冲超时：显示缓冲的m/o字符（仅发送显示字符，不发送任何额外命令）"""
     with state.lock:
         buf = state.momo_pending_buffer
         state.momo_pending_buffer = ""
@@ -1412,6 +1437,7 @@ def _flush_momo_buffer():
         safe_serial_write(c.upper().encode() + b"\n")
 
 def _trigger_expression_temporary(cmd_char, restore_delay=3.0):
+    """触发临时表情：持有序列锁，顺序发送 指令→等待→b"""
     def _sequence():
         _cmd_sequence_lock.acquire()
         _sequence_active.set()
@@ -1443,6 +1469,7 @@ def _trigger_expr_action(action):
         safe_serial_write(cmd)
 
 def _send_close_sequence():
+    """关闭程序前发送表情复位序列：切换表情→眼睛回正→脖子回正(DLC)→下巴上转3次→昏睡"""
     with state.lock:
         dlc_on = state.dlc_enabled
         service_running = state.service_active
@@ -1484,6 +1511,7 @@ def _start_momo_chain_timer(delay):
     _momo_timer.start()
 
 def _momo_chain_timeout():
+    """momo链超时：发送b恢复表情，重置链状态"""
     with state.lock:
         if state.momo_step == 0:
             return
@@ -1504,6 +1532,7 @@ def _momo_chain_timeout():
     t.start()
 
 def _handle_momo_chain():
+    """momo触发：持有序列锁，顺序发送指令→等待→b/下一步"""
     with state.lock:
         step = state.momo_step
         now = time.time()
@@ -1565,6 +1594,8 @@ def _handle_momo_chain():
         t.start()
 
 def _check_expression_triggers(key):
+    """返回值: False=未匹配(正常显示), True=已触发(不显示), 'buffered'=缓冲中(不显示)
+    字符先缓冲不显示，0.5秒内匹配则触发动画，超时则显示文字"""
     char = None
     try:
         if hasattr(key, 'char') and key.char:
@@ -1711,6 +1742,7 @@ class _RAWINPUT(ctypes.Structure):
     ]
 
 def _handle_raw_input(lparam):
+    """解析 WM_INPUT 消息并分发按键事件。"""
     if not _raw_kb_enabled:
         return
     try:
@@ -1819,6 +1851,7 @@ _mouse_watchdog_running = False
 _mouse_watchdog_thread = None
 
 def _mouse_watchdog():
+    """看门狗：检测鼠标钩子线程是否失效，自动重启。"""
     global _mouse_watchdog_running
     while _mouse_watchdog_running:
         time.sleep(10)  # 优化：从5秒增加到10秒，降低CPU唤醒频率
@@ -1932,6 +1965,9 @@ def _cursor_really_moved(x, y):
     return False
 
 def _main_thread_call(callback):
+    """主线程时直接调用（Raw Input 经 WndProc 在主线程触发），
+    后台线程时用 root.after 调度（pynput 鼠标线程）。
+    在 WndProc 内调用 root.after 会引发 Tcl 事件循环重入导致崩溃。"""
     if threading.current_thread() is threading.main_thread():
         try:
             callback()
@@ -2400,6 +2436,7 @@ class ModernToggle(tk.Frame):
                                    style=tk.ARC, outline=outline, width=1)
 
     def _draw(self):
+        """Canvas 绘制开关"""
         self._draw_canvas()
 
     def _draw_pil(self):
@@ -2553,6 +2590,8 @@ class ModernButton(tk.Frame):
 
 
 class RoundedButton(tk.Canvas):
+    """圆角按钮组件，使用 PIL 绘制抗锯齿圆角矩形，支持 hover 效果和禁用状态"""
+
     def __init__(self, parent, text, command=None, width=220, height=46,
                  radius=14, bg=None, fg=None, hover_bg=None,
                  disabled_bg=None, disabled_fg=None,
@@ -2586,6 +2625,7 @@ class RoundedButton(tk.Canvas):
             self.bind("<Configure>", self._on_configure)
 
     def _on_configure(self, event):
+        """窗口大小变化时重新绘制按钮以适应新宽度"""
         if event.width > 10 and event.width != self._width:
             self._width = event.width
             self._draw_button()
@@ -2601,6 +2641,7 @@ class RoundedButton(tk.Canvas):
         draw.pieslice([x2 - 2 * radius, y2 - 2 * radius, x2, y2], 0, 90, fill=fill)
 
     def _draw_button(self):
+        """Canvas 绘制圆角按钮"""
         self.delete("all")
         if self._disabled:
             fill = self._disabled_bg
@@ -2748,6 +2789,7 @@ def toggle_expr_auto_restore():
     KeybindWindow.update_all_auto_restore_state(active)
 
 def toggle_eco_qos():
+    """切换 效率模式"""
     if not is_eco_qos_supported():
         return
     current = config_data.get("eco_qos_enabled", False)
@@ -2764,6 +2806,7 @@ def toggle_eco_qos():
         pass
 
 def _sync_eco_qos_toggle():
+    """同步 开关 UI 状态与实际生效状态（供 init_tasks 后台线程调用）"""
     try:
         if eco_qos_toggle is not None:
             eco_qos_toggle.set_active(is_eco_qos_active())
@@ -2824,6 +2867,7 @@ def refresh_ports():
         logger.warning(f"刷新串口失败: {e}")
 
 def _get_work_area():
+    """获取当前屏幕工作区边界（排除任务栏）"""
     try:
         rect = wintypes.RECT()
         user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0)  # SPI_GETWORKAREA
@@ -2832,6 +2876,7 @@ def _get_work_area():
         return 0, 0, win.winfo_screenwidth(), win.winfo_screenheight()
 
 def place_window_right_of_main(win, width, height, offset_y=40):
+    """将窗口放置在主窗口右侧；若右侧空间不足则放左侧；始终保证在屏幕内"""
     try:
         root.update_idletasks()
         main_x = root.winfo_rootx()
@@ -2869,6 +2914,7 @@ class ResolutionSelectWindow:
 
     @classmethod
     def get_or_create(cls, parent, callback):
+        """单例：若已有打开的窗口则聚焦，否则新建"""
         if cls._active_instance is not None:
             inst = cls._active_instance
             try:
@@ -2884,6 +2930,7 @@ class ResolutionSelectWindow:
         return inst
 
     def _clear_active(self):
+        """窗口关闭时清理单例引用"""
         if ResolutionSelectWindow._active_instance is self:
             ResolutionSelectWindow._active_instance = None
 
@@ -3193,6 +3240,7 @@ class KeybindWindow:
         self.clear_btns[action] = clr_btn
 
     def _apply_dlc_state(self):
+        """根据 DLC 开关状态启用/禁用表情快捷键的修改和清除按钮"""
         btn_state = tk.NORMAL if self.dlc_on else tk.DISABLED
         for action in self.expr_action_keys:
             if action in self.modify_btns:
@@ -3202,6 +3250,7 @@ class KeybindWindow:
 
     @classmethod
     def get_or_create(cls, parent):
+        """单例：若已有打开的窗口则聚焦，否则新建"""
         for inst in cls._active_instances:
             try:
                 if inst.win.winfo_exists():
@@ -3215,12 +3264,14 @@ class KeybindWindow:
 
     @classmethod
     def update_all_dlc_state(cls, dlc_on):
+        """DLC 开关切换时同步所有已打开的 KeybindWindow"""
         for inst in cls._active_instances:
             inst.dlc_on = dlc_on
             inst._apply_dlc_state()
 
     @classmethod
     def update_all_auto_restore_state(cls, auto_restore_on):
+        """自动恢复表情开关切换时同步所有已打开的 KeybindWindow"""
         for inst in cls._active_instances:
             inst.auto_restore_on = auto_restore_on
             try:
@@ -3720,6 +3771,7 @@ class ProcessManagerWindow:
 
     @classmethod
     def get_or_create(cls, parent):
+        """单例：若已有打开的窗口则聚焦，否则新建"""
         if cls._instance is not None:
             try:
                 if cls._instance.win.winfo_exists():
@@ -3988,6 +4040,7 @@ def stop_service():
 PROCESS_MONITOR_INTERVAL = 2.5  # 秒，监视轮询间隔（已优化：从1.5s增加，降低CPU唤醒频率）
 
 def find_blocking_process():
+    """：更高效的进程检测，减少 psutil 开销（性能优化）"""
     try:
         targets = get_blocking_targets()
         if not targets:
@@ -4101,6 +4154,7 @@ def get_screen_resolution():
     return f"{w}x{h}"
 
 def apply_resolution_change(res_str, ox=0, oy=0):
+    """统一处理分辨率变更：更新输入框、配置文件，若服务运行中则实时更新映射区域。"""
     res_entry.delete(0, tk.END)
     res_entry.insert(0, res_str)
     config_data["resolution"] = res_str
@@ -4157,6 +4211,7 @@ def _on_system_power_event():
         logger.error("[系统事件] DLC未开启，跳过昏睡指令")
 
 def _install_power_event_monitor():
+    """安装 WndProc 钩子：处理电源事件 + Raw Input 键盘监听。"""
     global _original_wndproc, _new_wndproc_ref, _power_wndproc_type
     try:
         if root is None or not root.winfo_exists():
@@ -4309,7 +4364,7 @@ def create_gui():
         state.keybinds = config_data.get("keybinds", DEFAULT_KEYBINDS.copy())
 
     root = tk.Tk()
-    root.title("布鲁斯控制台  v4.0")
+    root.title("布鲁斯控制台  v4.1")
     root.geometry("700x840")
     root.minsize(640, 800)
     root.configure(bg=COLORS["bg"])
@@ -4372,7 +4427,7 @@ def create_gui():
     title_x = 74 if logo_label else 20
     tk.Label(header, text="布鲁斯控制台", font=("思源真黑体", 15, "bold"),
              fg=COLORS["accent"], bg=COLORS["bg_secondary"]).place(x=title_x, y=18)
-    tk.Label(header, text="v4.0·Mod By Marco", font=("思源真黑体", 9),
+    tk.Label(header, text="v4.1·Mod By Marco", font=("思源真黑体", 9),
              fg=COLORS["text_muted"], bg=COLORS["bg_secondary"]).place(x=title_x, y=44)
 
     tk.Button(header, text="⚙  设置", command=open_settings,
@@ -4497,17 +4552,17 @@ def create_gui():
              bg=COLORS["card"], fg=COLORS["text_dim"],
              font=("思源真黑体", 8), anchor="w").pack(fill=tk.X, padx=12, pady=(2, 6))
 
-    # ---- EcoQoS 效率模式开关 ----
+    # ---- 效率模式开关 ----
     global eco_qos_toggle
     eco_qos_supported = is_eco_qos_supported()
     # 初始状态用配置值（实际生效在 init_tasks 中，稍后会同步 UI）
     eco_qos_on = config_data.get("eco_qos_enabled", True) if eco_qos_supported else False
     if eco_qos_supported:
         tk.Frame(sw_body, bg=COLORS["border"], height=1).pack(fill=tk.X, padx=12)
-        eco_qos_toggle = ModernToggle(sw_body, "EcoQoS 效率模式", callback=toggle_eco_qos,
+        eco_qos_toggle = ModernToggle(sw_body, "效率模式", callback=toggle_eco_qos,
                                       active=eco_qos_on, hotkey_text="", bg=COLORS["card"])
         eco_qos_toggle.pack(fill=tk.X)
-        tk.Label(sw_body, text="🍃 降低CPU温度和电量消耗（任务管理器可见叶子图标）",
+        tk.Label(sw_body, text="🍃 开启后任务管理器显示叶子图标",
                  bg=COLORS["card"], fg=COLORS["text_dim"],
                  font=("思源真黑体", 8), anchor="w").pack(fill=tk.X, padx=12, pady=(2, 6))
     else:
@@ -4540,6 +4595,7 @@ def create_gui():
     tip_label_dlc.pack(pady=(2, 0))
 
     def _show_close_dialog():
+        """显示关闭确认对话框，返回 (action, remember) 或 (None, False)"""
         dialog = tk.Toplevel(root)
         dialog.title("关闭确认")
         dialog.resizable(False, False)
@@ -4666,37 +4722,37 @@ def create_gui():
     CERT_SUBJECT = "CN=Amicus&Marco, E=w243643896@vip.qq.com"
 
     def _is_cert_in_root_store():
-        """检查内置证书是否已安装在当前用户的受信任根证书颁发机构中
+        """检查内置证书是否已安装在受信任的根证书颁发机构中
+        使用 certutil 检查，同时检查 CurrentUser 和 LocalMachine
         Returns: True=已安装, False=未安装/检查失败
         """
         try:
-            ps_script = r'''
-            $ErrorActionPreference = "Stop"
-            $thumbprint = $args[0]
-            $store = New-Object System.Security.Cryptography.X509Certificates.X509Store(
-                [System.Security.Cryptography.X509Certificates.StoreName]::Root,
-                [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
-            $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadOnly)
-            $found = $store.Certificates.Find(
-                [System.Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
-                $thumbprint, $false)
-            $store.Close()
-            if ($found.Count -gt 0) {
-                Write-Output "TRUSTED"
-            } else {
-                Write-Output "NOT_TRUSTED"
-            }
-    '''
+            # 先检查当前用户的根存储
             result = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", ps_script, CERT_THUMBPRINT],
+                ["certutil", "-user", "-store", "Root", CERT_THUMBPRINT],
                 capture_output=True, text=True, timeout=10, creationflags=0x08000000
             )
-            return "TRUSTED" in result.stdout
+            output = result.stdout + result.stderr
+            # certutil 找到证书时会显示指纹（可能是小写）
+            if CERT_THUMBPRINT.lower() in output.lower():
+                return True
+
+            # 再检查本地计算机的根存储
+            result2 = subprocess.run(
+                ["certutil", "-store", "Root", CERT_THUMBPRINT],
+                capture_output=True, text=True, timeout=10, creationflags=0x08000000
+            )
+            output2 = result2.stdout + result2.stderr
+            if CERT_THUMBPRINT.lower() in output2.lower():
+                return True
+
+            return False
         except Exception:
             return False
 
     def _install_cert_to_root(cert_path):
         """将证书安装到受信任的根证书颁发机构（当前用户）
+        使用 certutil 安装
         Returns: (success, error_msg)
         """
         try:
@@ -4834,12 +4890,12 @@ def create_gui():
             elif config_data.get("auto_interact", False):
                 root.after(400, lambda: manual_start(auto=True))
 
-        # 应用 EcoQoS 效率模式
+        # 应用 效率模式
         if is_eco_qos_supported() and config_data.get("eco_qos_enabled", True):
             if set_eco_qos(True):
-                logger.info("[启动] EcoQoS 效率模式已启用 🍃")
+                logger.info("[启动] 效率模式已启用 🍃")
             else:
-                logger.warning("[启动] EcoQoS 开启失败，已禁用")
+                logger.warning("[启动] 开启失败，已禁用")
                 config_data["eco_qos_enabled"] = False
             # 同步 UI 开关状态（确保与实际生效状态一致）
             try:
